@@ -1,14 +1,10 @@
 #!/usr/bin/python
 #-*- encoding: utf-8 -*-
 
-from os import POSIX_FADV_SEQUENTIAL
 import gi
 import sys
 import praw
-import time
 import urllib
-import markdown
-import requests
 import datetime
 import threading
 import faulthandler
@@ -22,6 +18,8 @@ from gi.repository.GdkPixbuf import Pixbuf
 from main_handler import Handler_for_main
 from post_handler import Handler_for_post
 
+from post_view import Post_View
+
 from markdown_view_original import MarkdownRenderer
 from markdown_view import MarkdownView
 
@@ -34,19 +32,35 @@ faulthandler.enable()
 
 class MainApp:
     def __init__(self):
-        self.pane          = "Home"
-        self.section       = "front"
-        self.post_limit    = 20
-        self.count         = 0
-        self.lock          = False
-        self.postsBox      = []
-        self.subredditsBox = None
+        self.pane            = "Home"
+        self.section         = "front"
+        self.submissions     = []
+        self.subreddits      = []
+
+        self.post_limit      = 20
+
+        self.postsBox        = []
+        self.subsBox         = []
+
+        self.postsBox_origin = []
+        self.subsBox_origin  = []
+
+        self.posts_lock      = False
+        self.subs_lock       = False
+
+        self.posts_run       = False
+        self.subs_run        = False
+        self.kill            = None
+
+        self.builder_lock    = False
 
         # LOGIN ACTIONS
         self.reddit = praw.Reddit(
             "auth",
             config_interpolation = "basic"
         )
+        threading.Thread(target=self.getSubs).start()
+        threading.Thread(target=self.getPosts).start()
 
         # GETTING MAIN WINDOW GLADE OBJECT
         self.builder = Gtk.Builder()
@@ -69,11 +83,10 @@ class MainApp:
 
         self.window.set_border_width(10)
 
-        # RUN REFRESHFEED ON STARTUP
-        print("Starting thread...")
-        threading.Thread(target=self.loadFeed, daemon=True).start()
-        threading.Thread(target=self.startup, daemon=True).start()
         self.window.show_all()
+
+        # RUN REFRESHFEED ON STARTUP
+        threading.Thread(target=self.loadPosts).start()
 
     # KEYBOARD SHORTCUTS
     def _key_press_event(self, widget, event):
@@ -87,90 +100,171 @@ class MainApp:
             Gtk.main_quit()
 
     # MAIN FUNCTIONS
-    def startup(self, data=None):
-        print("Startup Function started.")
-        while self.count < 20:
-            if self.lock:
-                print("Obtained lock.")
-                GLib.idle_add(self.showFeed)
-                self.lock = False
-
-    def showFeed(self):
-        print("ShowFeed started.")
-        item = self.postsBox.pop(0)
-        self.listview.add(item)
-        item.show()
-        self.listview.show_all()
-        self.count += 1
-        print("Returned false.")
-        return False
-
     def clearListBox(self):
         for row in self.listview.get_children():
-            self.listview.remove(row)
+            GLib.idle_add(self.listview.remove, row)
 
-    def loadFeed(self):
-        self.postsBox = []
+    def getSubs(self):
+        self.subreddits = []
+        self.subs_run   = False
 
-        # CHECK FOR WHICH SUBREDDIT TO LOAD POSTS FROM
+        self.subreddits = sorted(
+            list(self.reddit.user.subreddits(limit=None)),
+            key=lambda s: s.display_name.lower(),
+        )
+
+        self.subs_run = True
+        return False
+
+    def getPosts(self):
+        self.submissions = []
+
         if self.section == "front":
-            subreddit_feed = self.reddit.front.hot(limit = self.post_limit)
+            self.submissions = self.reddit.front.hot(limit = self.post_limit)
         else:
-            subreddit_feed = self.reddit.subreddit(self.section).hot(limit = self.post_limit)
+            self.submissions = self.reddit.subreddit(self.section).hot(limit = self.post_limit)
 
-        # GO THROUGH THE FEED
+        for submission in self.submissions:
+            self.postsBox.append(submission)
+
+        return False
+
+    def showSubs(self, subreddit):
+        # KILL FUNCTION
+        if self.kill and self.kill != "Subs":
+            return False
+
+        row = Gtk.ListBoxRow()
+        row.set_margin_bottom(10)
+        sub = Gtk.Label()
+        sub.set_halign(Gtk.Align.START)
+        sub.set_text(subreddit.display_name)
+        row.add(sub)
+
+        self.listview.add(row)
+        row.show_all()
+        
+        return False
+
+    def loadSubs(self):
+        # WAIT UNTIL ALL SUBS ARE LOADED
+        while not self.subs_run:
+            continue
+
+        # ADD EACH SUB TO LISTBOX
+        for subreddit in self.subreddits:
+            # KILL FUNCTION
+            if self.kill and self.kill != "Subs":
+                return False
+            GLib.idle_add(self.showSubs, subreddit)
+        print("Subreddit rows added to Listbox.")
+        return False
+
+    def loadPosts(self):
         count = 0
-        for submission in subreddit_feed:
-            # CREATE A NEW POST OBJECT FOR EVERY SUBMISSION
-            posts_builder = Gtk.Builder.new_from_file("ui/post_view.glade")
+        while count < self.post_limit:
+            # KILL FUNCTION
+            if self.kill and self.kill != "Posts":
+                if self.builder_lock:
+                    self.builder_lock = False
+                return False
 
-            posts_builder.connect_signals(Handler_for_post(posts_builder, self.reddit, submission.id))
+            # ADD EACH POST TO LISTBOX
+            if len(self.postsBox) > 0:
+                submission = self.postsBox.pop(0)
+                self.showPosts(submission)
+                #GLib.idle_add(self.showPosts, submission)
+                count += 1
+        print("Submission rows added to Listbox.")
+        return False
 
-            post = posts_builder.get_object("Post_View")
+    def addPost(self, item):
+        # KILL FUNCTION
+        if self.kill and self.kill != "Posts":
+            if self.builder_lock:
+                self.builder_lock = False
+            return False
 
-            posts_builder.get_object("Subreddit").set_text('r/'+submission.subreddit.display_name)
-            posts_builder.get_object("Posted_By").set_text(submission.author.name)
-            posts_builder.get_object("Post_Title").set_text(submission.title)
-            posts_builder.get_object("Post_ID").set_markup(submission.id)
+        row = Gtk.ListBoxRow()
+        row.set_margin_bottom(10)
 
-            if submission.is_self:
-                if hasattr(submission, 'preview'):
-                    preview = submission.preview['images'][0]['source']
-                    url = preview['url']
+        row.add(item)
+        self.listview.add(row)
+        row.show_all()
+        return False
 
-                    response = urllib.request.urlopen(url)
-                    pixbuf = Pixbuf.new_from_stream_at_scale(
-                        Gio.MemoryInputStream.new_from_data(response.read(), None),
-                        preserve_aspect_ratio=True,
-                        width=preview['width'], 
-                        height=preview['height'])
-                    posts_builder.get_object("Thumbnail").set_from_pixbuf(pixbuf)
-                    row = Gtk.ListBoxRow()
-                    row.set_margin_bottom(10)
+    def addPostAlternative(self, pack):
+        # KILL FUNCTION
+        if self.kill and self.kill != "Posts":
+            if self.builder_lock:
+                self.builder_lock = False
+            return False
 
-                    row.add(post)
-                    self.postsBox.append(row)
-                else:
+        box = Gtk.Box()
+        box.add(MarkdownView(pack[1]))
 
-                    post.remove(posts_builder.get_object("Thumbnail"))
+        pack[0].pack_start(box, True, True, 0)
+        row = Gtk.ListBoxRow()
+        row.set_margin_bottom(10)
 
-                    box = Gtk.Box()
-                    box.add(MarkdownView(submission.selftext))
+        row.add(pack[0])
+        self.listview.add(row)
+        row.show_all()
+        return False
 
-                    post.pack_start(box, True, True, 0)
+    def showPosts(self, submission):
+        # CREATE A NEW POST OBJECT FOR EVERY SUBMISSION
+
+        # BEFORE ISSUE
+        print("## before issue $$")
+        while self.posts_lock:
+            continue
+        self.posts_lock = True
+        post = Post_View()
+        self.posts_lock = False
+        print("== before issue $$\n")
+        # AFTER ISSUE
+
+        #post.get_children()[0].get_children()[0].get_children()[0].set_text('r/'+submission.subreddit.display_name)
+        post.get_children()[0].get_children()[0].get_children()[0].set_markup('<span foreground="#ffaa00"> %s </span>' %('r/'+submission.subreddit.display_name))
+        #posts_builder.get_object("Subreddit").set_text('r/'+submission.subreddit.display_name)
+
+        #post.get_children()[0].get_children()[0].get_children()[2].set_text(submission.author.name)
+        post.get_children()[0].get_children()[0].get_children()[2].set_markup('<span foreground="#9d9d9d"> %s </span>' %(submission.author.name))
+        #posts_builder.get_object("Posted_By").set_text(submission.author.name)
+
+        #post.get_children()[0].get_children()[1].get_children()[0].set_text(submission.title)
+        post.get_children()[0].get_children()[1].get_children()[0].set_markup('<span foreground="#eaeef2"> %s </span>' %(submission.title.replace("&","&amp;")))
+        #posts_builder.get_object("Post_Title").set_text(submission.title)
+
+        post.get_children()[0].get_children()[2].get_children()[0].set_markup(submission.id)
+        #posts_builder.get_object("Post_ID").set_markup(submission.id)
+
+
+        if submission.is_self:
+            if hasattr(submission, 'preview'):
+                preview = submission.preview['images'][0]['source']
+                url = preview['url']
+
+                response = urllib.request.urlopen(url)
+                pixbuf = Pixbuf.new_from_stream_at_scale(
+                    Gio.MemoryInputStream.new_from_data(response.read(), None),
+                    preserve_aspect_ratio=True,
+                    width=preview['width'], 
+                    height=preview['height'])
+
+                post.get_children()[1].set_from_pixbuf(pixbuf)
+                #posts_builder.get_object("Thumbnail").set_from_pixbuf(pixbuf)
+                
+                GLib.idle_add(self.addPost, post)
             else:
-                self.loadThumbnail(submission, posts_builder.get_object("Thumbnail"))
+                post.remove(post.get_children()[1])
 
-            row = Gtk.ListBoxRow()
-            row.set_margin_bottom(10)
-
-            row.add(post)
-            self.postsBox.append(row)
-            print("Added post to postsBox\nCount:%s" %(count))
-            count += 1
-            self.lock = True
-            while self.lock == True:
-                pass
+                pack = [post, submission.selftext]
+                GLib.idle_add(self.addPostAlternative, pack)
+        else:
+            self.loadThumbnail(submission, post.get_children()[1])
+            GLib.idle_add(self.addPost, post)
 
     def loadThumbnail(self, submission, image):
         url = submission.url.split("?")[0].replace("preview", "i")
