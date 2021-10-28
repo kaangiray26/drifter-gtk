@@ -3,13 +3,13 @@
 `Drifter` is a simple yet complete and useful Reddit application for desktop using GTK. It is not intended to replace the Reddit web application but to offer a more friendly approach for using Reddit.
 
 <p align="center">
-  <img alt="ss1" src="https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/v1_dark.png?token=ACWGFV4IHIHUGNZVYUNF2H3BMAZT4" width="45%">
+  <img alt="ss1" src="https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/v1_dark.png" width="45%">
 &nbsp; &nbsp; &nbsp; &nbsp;
-  <img alt="ss2" src="https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/subs.png?token=ACWGFV2RPY4TM2EBG2FUYC3BMAZT6" width="45%">
+  <img alt="ss2" src="https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/subs.png" width="45%">
 </p>
 
-<!-- ![Screenshot 1](https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/v1_dark.png?token=ACWGFV4IHIHUGNZVYUNF2H3BMAZT4)
-![Screenshot 2](https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/subs.png?token=ACWGFV2RPY4TM2EBG2FUYC3BMAZT6)
+<!-- ![Screenshot 1](https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/v1_dark.png)
+![Screenshot 2](https://raw.githubusercontent.com/f34rl00/drifter/master/screenshots/subs.png)
 -->
 
 ## Features
