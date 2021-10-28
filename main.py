@@ -1,14 +1,10 @@
 #!/usr/bin/python
 #-*- encoding: utf-8 -*-
 
-from os import POSIX_FADV_SEQUENTIAL
 import gi
 import sys
 import praw
-import time
 import urllib
-import markdown
-import requests
 import datetime
 import threading
 import faulthandler
@@ -34,19 +30,31 @@ faulthandler.enable()
 
 class MainApp:
     def __init__(self):
-        self.pane          = "Home"
-        self.section       = "front"
-        self.post_limit    = 20
-        self.count         = 0
-        self.lock          = False
-        self.postsBox      = []
-        self.subredditsBox = None
+        self.pane            = "Home"
+        self.section         = "front"
+        self.subreddits      = []
+
+        self.post_limit      = 20
+
+        self.postsBox        = []
+        self.subsBox         = []
+
+        self.postsBox_origin = []
+        self.subsBox_origin  = []
+
+        self.posts_lock      = False
+        self.subs_lock       = False
+
+        self.subs_run        = False
+        self.kill            = None
 
         # LOGIN ACTIONS
         self.reddit = praw.Reddit(
             "auth",
             config_interpolation = "basic"
         )
+        threading.Thread(target=self.getSubs).start()
+        threading.Thread(target=self.loadFeed).start()
 
         # GETTING MAIN WINDOW GLADE OBJECT
         self.builder = Gtk.Builder()
@@ -69,11 +77,10 @@ class MainApp:
 
         self.window.set_border_width(10)
 
-        # RUN REFRESHFEED ON STARTUP
-        print("Starting thread...")
-        threading.Thread(target=self.loadFeed, daemon=True).start()
-        threading.Thread(target=self.startup, daemon=True).start()
         self.window.show_all()
+
+        # RUN REFRESHFEED ON STARTUP
+        threading.Thread(target=self.postsStartup).start()
 
     # KEYBOARD SHORTCUTS
     def _key_press_event(self, widget, event):
@@ -87,22 +94,60 @@ class MainApp:
             Gtk.main_quit()
 
     # MAIN FUNCTIONS
-    def startup(self, data=None):
-        print("Startup Function started.")
-        while self.count < 20:
-            if self.lock:
-                print("Obtained lock.")
+    def getSubs(self):
+        self.subreddits = sorted(
+            list(self.reddit.user.subreddits(limit=None)),
+            key=lambda s: s.display_name.lower(),
+        )
+        self.subs_run = True
+        return False
+
+    def postsStartup(self, data=None):
+        count = 0
+        while count < self.post_limit:
+            # KILL FUNCTION
+            if self.kill and self.kill != "Posts":
+                self.posts_lock = False
+                return False
+
+            if len(self.postsBox) and not self.posts_lock:
                 GLib.idle_add(self.showFeed)
-                self.lock = False
+                self.posts_lock = True
+                count += 1
+        self.kill = None
 
     def showFeed(self):
-        print("ShowFeed started.")
         item = self.postsBox.pop(0)
         self.listview.add(item)
-        item.show()
-        self.listview.show_all()
-        self.count += 1
-        print("Returned false.")
+        item.show_all()
+        self.posts_lock = False
+        return False
+
+    def showSubs(self, subreddit):
+        row = Gtk.ListBoxRow()
+        row.set_margin_bottom(10)
+        sub = Gtk.Label()
+        sub.set_halign(Gtk.Align.START)
+        sub.set_text(subreddit.display_name)
+        row.add(sub)
+
+        self.listview.add(row)
+        row.show_all()
+        
+        return False
+
+    def loadSubs(self):
+        # WAIT UNTIL ALL SUBS ARE LOADED
+        while not self.subs_run:
+            continue
+
+        # ADD EACH SUB TO LISTBOX
+        for subreddit in self.subreddits:
+            # KILL FUNCTION
+            if self.kill and self.kill != "Subs":
+                return False
+            GLib.idle_add(self.showSubs, subreddit)
+        print("Subreddit rows added to subsBox.")
         return False
 
     def clearListBox(self):
@@ -110,7 +155,8 @@ class MainApp:
             self.listview.remove(row)
 
     def loadFeed(self):
-        self.postsBox = []
+        self.postsBox        = []
+        self.postsBox_origin = []
 
         # CHECK FOR WHICH SUBREDDIT TO LOAD POSTS FROM
         if self.section == "front":
@@ -119,13 +165,10 @@ class MainApp:
             subreddit_feed = self.reddit.subreddit(self.section).hot(limit = self.post_limit)
 
         # GO THROUGH THE FEED
-        count = 0
         for submission in subreddit_feed:
             # CREATE A NEW POST OBJECT FOR EVERY SUBMISSION
             posts_builder = Gtk.Builder.new_from_file("ui/post_view.glade")
-
             posts_builder.connect_signals(Handler_for_post(posts_builder, self.reddit, submission.id))
-
             post = posts_builder.get_object("Post_View")
 
             posts_builder.get_object("Subreddit").set_text('r/'+submission.subreddit.display_name)
@@ -166,11 +209,8 @@ class MainApp:
 
             row.add(post)
             self.postsBox.append(row)
-            print("Added post to postsBox\nCount:%s" %(count))
-            count += 1
-            self.lock = True
-            while self.lock == True:
-                pass
+            self.postsBox_origin.append(row)
+        return False
 
     def loadThumbnail(self, submission, image):
         url = submission.url.split("?")[0].replace("preview", "i")
